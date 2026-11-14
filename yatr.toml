@@ -1,0 +1,26 @@
+[tasks.fmt]
+desc = "Format code"
+run = ["cargo fmt --all"]
+
+[tasks.fmt-check]
+desc = "Check formatting"
+sources = ["**/*.rs"]
+run = ["cargo fmt --all --check"]
+
+[tasks.lint]
+desc = "Clippy, warnings denied"
+sources = ["**/*.rs", "**/Cargo.toml"]
+run = ["cargo clippy --all-targets -- -D warnings"]
+
+[tasks.test]
+desc = "Run tests"
+run = ["cargo test --all"]
+
+[tasks.build]
+desc = "Release build"
+sources = ["**/*.rs", "**/Cargo.toml"]
+run = ["cargo build --release"]
+
+[tasks.ci]
+desc = "Everything CI runs"
+depends = ["fmt-check", "lint", "test"]
