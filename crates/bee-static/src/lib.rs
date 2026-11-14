@@ -226,22 +226,134 @@ pub fn scan_path(root: &Path) -> std::io::Result<Report> {
     Ok(Report::build(w.evidence, unchecked))
 }
 
+/// The outcome of fetching one URL that a pasted command would download and run.
+pub enum Fetch {
+    Got { url: String, bytes: Vec<u8> },
+    Failed { url: String, reason: String },
+}
+
+/// URLs a pasted command would download and immediately run, for the caller to fetch.
+pub fn download_urls(command: &str) -> Vec<String> {
+    text::download_urls(command)
+}
+
 /// Inspects a command someone is about to paste into a terminal.
 pub fn scan_command(command: &str) -> Report {
+    scan_command_fetched(command, &[])
+}
+
+/// As [`scan_command`], with the scripts it downloads already fetched and read in its place.
+/// Nothing fetched is run or written to disk.
+pub fn scan_command_fetched(command: &str, fetched: &[Fetch]) -> Report {
     let mut evidence = text::scan_text(command, Context::Pasted, "", None);
     for e in &mut evidence {
         e.location = None;
     }
     let mut unchecked = vec!["The command was not run.".to_string()];
-    if text::has_download_exec(command) {
-        let from = text::download_host(command)
-            .map(|h| format!(" from {h}"))
-            .unwrap_or_default();
+
+    let wanted = text::download_urls(command);
+    let got = |u: &str| {
+        fetched
+            .iter()
+            .any(|f| matches!(f, Fetch::Got { url, .. } if url == u))
+    };
+    let all_read = !wanted.is_empty() && wanted.iter().all(|u| got(u));
+    if all_read {
+        for e in evidence.iter_mut().filter(|e| e.rule == "download-and-run") {
+            e.severity = Severity::Info;
+            e.summary = "Downloads a script and runs it straight away. bee-eater fetched that script and read it; what it found is listed here.".into();
+        }
+    }
+
+    for f in fetched {
+        match f {
+            Fetch::Got { url, bytes } => {
+                evidence.extend(scan_fetched(bytes, url));
+                unchecked.push(format!(
+                    "The script from {url} was read, not run. Anything it downloads in turn was not fetched."
+                ));
+            }
+            Fetch::Failed { url, reason } => {
+                unchecked.push(format!(
+                    "Fetching {url} failed ({reason}), so it was not read."
+                ));
+            }
+        }
+    }
+    for u in wanted
+        .iter()
+        .filter(|u| !fetched.iter().any(|f| fetch_url(f) == u.as_str()))
+    {
         unchecked.push(format!(
-            "The script it downloads{from} was not fetched or read."
+            "The script it downloads from {u} was not fetched or read. `issafe --fetch` reads it without running it."
         ));
     }
+    if wanted.is_empty() && text::has_download_exec(command) {
+        unchecked.push("The script it downloads was not fetched or read; bee-eater could not pick out its address.".into());
+    }
     Report::build(evidence, unchecked)
+}
+
+fn fetch_url(f: &Fetch) -> &str {
+    match f {
+        Fetch::Got { url, .. } | Fetch::Failed { url, .. } => url,
+    }
+}
+
+fn scan_fetched(bytes: &[u8], url: &str) -> Vec<Evidence> {
+    if let formats::Magic::Compiled(what) = formats::magic_of(bytes) {
+        return vec![
+            Evidence::new(
+                "compiled-program",
+                Severity::Opaque,
+                format!("What it downloads is a {what}, not a script, and bee-eater cannot look inside it yet."),
+            )
+            .at(url, None),
+        ];
+    }
+    let Some(text) = as_text(bytes) else {
+        return vec![
+            Evidence::new(
+                "unreadable-download",
+                Severity::Opaque,
+                "What it downloads is neither a script nor anything bee-eater can read.",
+            )
+            .at(url, None),
+        ];
+    };
+    let head = text
+        .trim_start()
+        .get(..64)
+        .unwrap_or(text.trim_start())
+        .to_ascii_lowercase();
+    if head.starts_with("<!doctype html") || head.starts_with("<html") {
+        return vec![
+            Evidence::new(
+                "unreadable-download",
+                Severity::Opaque,
+                "The address answered with a web page, not a script. Lure servers show a harmless page to anything they think is a scanner.",
+            )
+            .at(url, None),
+        ];
+    }
+    let mut found = text::scan_text(text, Context::Fetched, url, Some(0));
+    let unseen_stage = found
+        .iter()
+        .any(|e| e.rule == "download-and-run" && e.severity >= Severity::Opaque);
+    if !unseen_stage && let Some((line, tool, excerpt)) = text::fetch_tool(text) {
+        found.push(
+            Evidence::new(
+                "downloads-more",
+                Severity::Opaque,
+                format!(
+                    "This script can download more (it uses {tool}), and whatever it downloads was not fetched or read. Installers often do the real work in that second download."
+                ),
+            )
+            .at(url, Some(line))
+            .excerpt(excerpt),
+        );
+    }
+    found
 }
 
 fn inspect_file(w: &mut Walk, rel: &Path, rel_s: &str, bytes: &[u8]) {

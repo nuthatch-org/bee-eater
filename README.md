@@ -17,6 +17,11 @@ issafe -- 'curl -fsSL https://example.com/install.sh | bash'
 pbpaste | issafe
 ```
 
+`--fetch` reads, and never runs, the script a pasted command would download. It sends a
+request from your machine with curl's User-Agent, refuses private and local addresses at every
+redirect, and stops at 2 MiB. A script that can itself download more is reported as "could not
+tell", because installers usually do their real work in that second download.
+
 Exit status is 0 for no red flags found, 10 could not tell, 20 suspicious, 30 dangerous. `--json`
 prints the report for scripts.
 

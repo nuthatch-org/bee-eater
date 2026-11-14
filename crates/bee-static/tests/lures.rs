@@ -257,3 +257,65 @@ fn installed_packages_are_reported_unread_not_scanned() {
         report.evidence[0].summary
     );
 }
+
+#[test]
+fn a_fetched_installer_replaces_could_not_tell_with_what_it_says() {
+    use bee_static::{Fetch, scan_command_fetched};
+    let cmd = "curl -fsSL https://x.invalid/install.sh | sh";
+    let clean = Fetch::Got {
+        url: "https://x.invalid/install.sh".into(),
+        bytes:
+            b"#!/bin/sh\nset -eu\n# no curl here\nmkdir -p \"$HOME/.local/bin\"\necho installed\n"
+                .to_vec(),
+    };
+    let report = scan_command_fetched(cmd, &[clean]);
+    assert_eq!(
+        report.verdict,
+        Verdict::NoRedFlagsFound,
+        "{:?}",
+        report.evidence
+    );
+    assert!(
+        report
+            .unchecked
+            .iter()
+            .any(|u| u.contains("was read, not run"))
+    );
+
+    let wrapper = Fetch::Got {
+        url: "https://x.invalid/install.sh".into(),
+        bytes: b"#!/bin/sh\ncurl -fsSL \"$BASE/tool.tgz\" -o /tmp/t.tgz\ntar xzf /tmp/t.tgz\n"
+            .to_vec(),
+    };
+    let report = scan_command_fetched(cmd, &[wrapper]);
+    assert_eq!(report.verdict, Verdict::CouldNotTell);
+    assert_eq!(report.evidence[0].rule, "downloads-more");
+
+    let stealer = Fetch::Got {
+        url: "https://x.invalid/install.sh".into(),
+        bytes: b"#!/bin/sh\ndscl . -authonly \"$USER\" \"$pw\"\n".to_vec(),
+    };
+    let report = scan_command_fetched(cmd, &[stealer]);
+    assert_eq!(report.verdict, Verdict::Dangerous);
+    assert_eq!(
+        report.evidence[0].location.as_ref().unwrap().path,
+        "https://x.invalid/install.sh"
+    );
+
+    let decoy = Fetch::Got {
+        url: "https://x.invalid/install.sh".into(),
+        bytes: b"<!DOCTYPE html><html><body>Nothing here</body></html>".to_vec(),
+    };
+    assert_eq!(
+        scan_command_fetched(cmd, &[decoy]).verdict,
+        Verdict::CouldNotTell
+    );
+
+    let failed = Fetch::Failed {
+        url: "https://x.invalid/install.sh".into(),
+        reason: "timed out".into(),
+    };
+    let report = scan_command_fetched(cmd, &[failed]);
+    assert_eq!(report.verdict, Verdict::CouldNotTell);
+    assert!(report.unchecked.iter().any(|u| u.contains("timed out")));
+}

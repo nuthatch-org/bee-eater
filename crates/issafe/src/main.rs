@@ -5,6 +5,8 @@ use std::process::ExitCode;
 use anyhow::{Context as _, Result};
 use bee_evidence::{Report, Severity, Verdict, sanitise_excerpt};
 use clap::Parser;
+
+mod fetch;
 use serde_json::json;
 
 /// Ask whether something is safe to open, install or run. Nothing is executed.
@@ -18,6 +20,11 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
+    /// Fetch and read (never run) the script a pasted command would download. This sends a
+    /// request from your machine, which the script's owner can see.
+    #[arg(long)]
+    fetch: bool,
+
     /// A command you were told to paste, after `--`.
     #[arg(last = true)]
     command: Vec<String>,
@@ -27,6 +34,7 @@ const EXAMPLES: &str = "Examples:
   issafe ./take-home-repo
   issafe \"a recruiter sent me this, ok?\" ./take-home-repo
   issafe -- 'curl -fsSL https://example.com/install.sh | bash'
+  issafe --fetch -- 'curl -fsSL https://example.com/install.sh | bash'
   pbpaste | issafe
 
 Exit status: 0 no red flags found, 10 could not tell, 20 suspicious, 30 dangerous, 2 usage.";
@@ -103,6 +111,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
             p.display().to_string(),
             bee_static::scan_path(p).with_context(|| format!("reading {}", p.display()))?,
         ),
+        Target::Command(c) if cli.fetch => {
+            let fetched: Vec<_> = bee_static::download_urls(c)
+                .iter()
+                .map(|u| {
+                    eprintln!(
+                        "issafe: fetching {} to read it, not run it",
+                        sanitise_excerpt(u, 200)
+                    );
+                    fetch::fetch(u)
+                })
+                .collect();
+            (
+                "the command".to_string(),
+                bee_static::scan_command_fetched(c, &fetched),
+            )
+        }
         Target::Command(c) => ("the command".to_string(), bee_static::scan_command(c)),
     };
     let question = question.join(" ");

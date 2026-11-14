@@ -12,3 +12,4 @@ bee-evidence = { path = "../bee-evidence" }
 bee-static = { path = "../bee-static" }
 clap = { version = "4.6.7", features = ["derive"] }
 serde_json = "1.0.154"
+ureq = "3.5.2"
