@@ -32,6 +32,15 @@ struct Cli {
     #[arg(long, exclusive = true)]
     doctor: bool,
 
+    /// Print the shell hook that checks risky-looking commands before they run. Only zsh for
+    /// now: add `eval "$(issafe --shell-init zsh)"` to ~/.zshrc.
+    #[arg(long, value_name = "SHELL", exclusive = true)]
+    shell_init: Option<String>,
+
+    /// Brief output for the shell hook: the verdict and one line per finding.
+    #[arg(long, hide = true)]
+    guard: bool,
+
     /// A command you were told to paste, after `--`.
     #[arg(last = true)]
     command: Vec<String>,
@@ -77,6 +86,13 @@ fn usage(msg: &str) -> Result<ExitCode> {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    if let Some(shell) = &cli.shell_init {
+        if shell != "zsh" {
+            return usage("only zsh is supported so far: issafe --shell-init zsh");
+        }
+        print!("{}", include_str!("../shell/issafe.zsh"));
+        return Ok(ExitCode::SUCCESS);
+    }
     if cli.doctor {
         let ready = doctor::run(&mut std::io::stdout().lock())?;
         return Ok(ExitCode::from(if ready { 0 } else { 1 }));
@@ -207,6 +223,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         });
         serde_json::to_writer_pretty(&mut out, &doc)?;
         writeln!(out)?;
+    } else if cli.guard {
+        let colour = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        render_brief(&mut out, &report, colour)?;
     } else {
         let colour = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
         render(&mut out, &subject, &question, &report, colour)?;
@@ -246,6 +265,33 @@ impl Paint {
             s.to_string()
         }
     }
+}
+
+fn render_brief(out: &mut impl Write, report: &Report, colour: bool) -> Result<()> {
+    if report.verdict == Verdict::NoRedFlagsFound {
+        return Ok(());
+    }
+    let p = Paint(colour);
+    let (label, code) = match report.verdict {
+        Verdict::Dangerous => ("DANGEROUS", "1;31"),
+        Verdict::Suspicious => ("SUSPICIOUS", "1;33"),
+        _ => ("COULD NOT TELL", "1;34"),
+    };
+    writeln!(out, "issafe: {}", p.wrap(code, label))?;
+    for e in report
+        .evidence
+        .iter()
+        .filter(|e| e.severity > Severity::Info)
+    {
+        writeln!(out, "  {}  {}", e.id, e.summary)?;
+    }
+    if report.verdict == Verdict::CouldNotTell {
+        writeln!(
+            out,
+            "  `issafe --fetch -- '<command>'` reads what it would download, without running it."
+        )?;
+    }
+    Ok(())
 }
 
 fn render(

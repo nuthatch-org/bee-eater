@@ -39,6 +39,18 @@ tell", because installers usually do their real work in that second download.
 Exit status is 0 for no red flags found, 10 could not tell, 20 suspicious, 30 dangerous. `--json`
 prints the report for scripts.
 
+### Paste guard (zsh)
+
+```sh
+eval "$(issafe --shell-init zsh)"   # in ~/.zshrc
+```
+
+When Enter is pressed on a line that looks like download-and-run, a base64 decode, `osascript`,
+a password check or an AI CLI with its safety prompts off, the line is held and checked. If
+issafe finds anything it prints the verdict above the prompt and keeps the line; Enter again runs
+it anyway. Ordinary commands never start issafe. An existing `accept-line` widget from another
+plugin is kept and still called.
+
 `issafe --doctor` checks whether this machine has what the sandbox will need (Apple Silicon and
 Hypervisor.framework, or a usable `/dev/kvm`, plus libkrun) and prints the fix for anything
 missing.
