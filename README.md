@@ -26,7 +26,10 @@ is what runs code at install.
 `issafe https://github.com/owner/repo` reads a public repository without checking it out. It makes
 a bare shallow clone with git's own configuration, hooks, credential helpers and every protocol
 but https switched off, then writes each file at the latest commit itself, so no filter, link or
-submodule gets to act.
+submodule gets to act. It also reads lines removed from files that run by themselves over the
+last 50 steps of history, so a lure scrubbed out of the latest commit still counts, capped at a
+warning, and an auto-run task that has rotated through three or more download hosts is reported
+as such.
 
 `--fetch` reads, and never runs, the script a pasted command would download. It sends a
 request from your machine with curl's User-Agent, refuses private and local addresses at every

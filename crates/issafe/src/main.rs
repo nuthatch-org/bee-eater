@@ -175,6 +175,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 },
             );
             report.unchecked.extend(unpacked.notes.iter().cloned());
+            let report = report.with_more(unpacked.history.clone(), Vec::new());
             (unpacked.label.clone(), report)
         }
         Target::Command(c) if cli.fetch => {

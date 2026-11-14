@@ -84,6 +84,8 @@ pub struct Unpacked {
     pub root: PathBuf,
     pub label: String,
     pub notes: Vec<String>,
+    /// Findings from outside the unpacked tree, such as a repository's history.
+    pub history: Vec<bee_evidence::Evidence>,
     pub(crate) _dir: tempfile::TempDir,
 }
 
@@ -143,6 +145,7 @@ fn npm(name: &str, version: &str, dir: tempfile::TempDir) -> Result<Unpacked, St
         root,
         label: format!("npm:{name}@{resolved}"),
         notes,
+        history: Vec::new(),
         _dir: dir,
     })
 }
@@ -203,6 +206,7 @@ fn pypi(name: &str, version: Option<&str>, dir: tempfile::TempDir) -> Result<Unp
         root: dir.path().to_path_buf(),
         label: format!("pypi:{name}=={resolved}"),
         notes,
+        history: Vec::new(),
         _dir: dir,
     })
 }

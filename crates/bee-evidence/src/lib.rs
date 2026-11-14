@@ -104,6 +104,18 @@ impl Report {
         }
     }
 
+    /// Rebuilds with more evidence; the verdict can only stay or rise.
+    pub fn with_more(self, more: Vec<Evidence>, unchecked: Vec<String>) -> Self {
+        let before = self.verdict;
+        let mut evidence = self.evidence;
+        evidence.extend(more);
+        let mut all = self.unchecked;
+        all.extend(unchecked);
+        let mut report = Report::build(evidence, all);
+        report.raise(before);
+        report
+    }
+
     pub fn raise(&mut self, proposed: Verdict) {
         self.verdict = self.verdict.raised_by(proposed);
     }
@@ -178,6 +190,22 @@ mod tests {
         assert_eq!(report.evidence[0].rule, "c");
         assert_eq!(report.evidence[0].id, "E1");
         assert_eq!(report.evidence[2].id, "E3");
+    }
+
+    #[test]
+    fn more_evidence_renumbers_and_never_lowers() {
+        let mut first = Report::build(vec![Evidence::new("a", Severity::Info, "x")], vec![]);
+        first.raise(Verdict::Suspicious);
+        let merged = first.with_more(
+            vec![Evidence::new("b", Severity::Danger, "y")],
+            vec!["u".into()],
+        );
+        assert_eq!(merged.verdict, Verdict::Dangerous);
+        assert_eq!(merged.evidence[0].rule, "b");
+        assert_eq!(merged.evidence[0].id, "E1");
+        assert_eq!(merged.unchecked, vec!["u".to_string()]);
+        let kept = Report::build(vec![], vec![]).with_more(vec![], vec![]);
+        assert_eq!(kept.verdict, Verdict::NoRedFlagsFound);
     }
 
     #[test]

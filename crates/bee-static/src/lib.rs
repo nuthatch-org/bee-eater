@@ -362,6 +362,95 @@ fn scan_fetched(bytes: &[u8], url: &str) -> Vec<Evidence> {
     found
 }
 
+/// One file's lines that were removed in an earlier commit. The code no longer runs, so nothing
+/// here is worse than a warning, but a lure scrubbed from history is still a lure.
+pub fn scan_removed(path: &str, removed: &str, commit: &str) -> Vec<Evidence> {
+    let rel = Path::new(path);
+    let name = rel
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = rel
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let parent = rel
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let editor_tasks = name == "tasks.json"
+        && matches!(parent.as_str(), ".vscode" | ".cursor" | ".windsurf")
+        || ext == "code-workspace";
+    let mut found = Vec::new();
+    if editor_tasks {
+        if removed.contains("folderOpen") {
+            found.push(
+                Evidence::new(
+                    "folder-open-task",
+                    Severity::Warning,
+                    "An editor task that ran when the folder was opened.",
+                )
+                .excerpt(
+                    removed
+                        .lines()
+                        .find(|l| l.contains("folderOpen"))
+                        .unwrap_or(""),
+                ),
+            );
+        }
+        found.extend(text::scan_text(removed, Context::AutoRun, path, None));
+    } else if name == "package.json" {
+        let hooks: String = removed
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start().trim_start_matches('"');
+                ["preinstall\"", "install\"", "postinstall\"", "prepare\""]
+                    .iter()
+                    .any(|h| t.starts_with(h))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        found.extend(text::scan_text(&hooks, Context::AutoRun, path, None));
+    } else if let Some(lang) = lang_of(&name, &ext, removed) {
+        found.extend(text::scan_text(removed, Context::Code(lang), path, None));
+    }
+
+    for e in &mut found {
+        e.severity = e.severity.min(Severity::Warning);
+        if e.severity == Severity::Opaque {
+            e.severity = Severity::Warning;
+        }
+        e.summary = format!(
+            "Removed since, but present in commit {commit}: {}",
+            e.summary
+        );
+        e.location = Some(bee_evidence::Location {
+            path: path.to_string(),
+            line: None,
+        });
+    }
+    found
+}
+
+/// Download hosts named on removed lines of an auto-run file, for spotting rotation.
+pub fn removed_download_hosts(path: &str, removed: &str) -> Vec<String> {
+    let auto_run = path.ends_with("tasks.json")
+        || path.ends_with(".code-workspace")
+        || path.ends_with("package.json");
+    if !auto_run {
+        return Vec::new();
+    }
+    let mut hosts: Vec<String> = text::download_urls(removed)
+        .iter()
+        .filter_map(|u| text::download_host(u))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
 fn inspect_file(w: &mut Walk, rel: &Path, rel_s: &str, bytes: &[u8]) {
     let name = rel
         .file_name()
