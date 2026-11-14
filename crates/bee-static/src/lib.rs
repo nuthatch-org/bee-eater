@@ -6,7 +6,7 @@ mod text;
 
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use bee_evidence::{Evidence, Report, Severity};
 use walkdir::WalkDir;
@@ -82,6 +82,7 @@ struct Walk {
     vscode: bool,
     unread: Vec<(String, &'static str)>,
     hit_cap: bool,
+    hook_targets: Vec<String>,
 }
 
 /// Inspects a folder, or a single file, without running anything in it.
@@ -173,6 +174,11 @@ pub fn scan_path(root: &Path) -> std::io::Result<Report> {
             )
             .at(first, None),
         );
+    }
+
+    let targets = std::mem::take(&mut w.hook_targets);
+    for target in targets {
+        read_as_install_script(&mut w, &base, &target);
     }
 
     let mut unchecked = vec![NOTHING_RAN.to_string()];
@@ -423,6 +429,13 @@ fn inspect_file(w: &mut Walk, rel: &Path, rel_s: &str, bytes: &[u8]) {
 
     if name == "package.json" {
         w.evidence.extend(formats::package_json(text, rel_s));
+        let dir = rel.parent().unwrap_or(Path::new(""));
+        for script in formats::hook_scripts(text) {
+            if let Some(target) = join_inside(dir, &script) {
+                w.hook_targets
+                    .push(target.to_string_lossy().replace('\\', "/"));
+            }
+        }
     }
 
     let auto_run = match name.as_str() {
@@ -455,6 +468,23 @@ fn inspect_file(w: &mut Walk, rel: &Path, rel_s: &str, bytes: &[u8]) {
         );
     }
 
+    if ext == "pth"
+        && let Some((n, line)) = text
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.starts_with("import ") || l.starts_with("import\t"))
+    {
+        w.evidence.push(
+            Evidence::new(
+                "python-startup-hook",
+                Severity::Warning,
+                "Python runs this line every time it starts, in every program, once the package is installed.",
+            )
+            .at(rel_s, Some(n + 1))
+            .excerpt(line),
+        );
+    }
+
     if ext == "svg" && text.to_ascii_lowercase().contains("<script") {
         w.evidence.push(
             Evidence::new(
@@ -470,6 +500,60 @@ fn inspect_file(w: &mut Walk, rel: &Path, rel_s: &str, bytes: &[u8]) {
         w.evidence
             .extend(text::scan_text(text, Context::Code(lang), rel_s, Some(0)));
     }
+}
+
+/// A file an install hook runs is auto-run code, so it is read again at that weight and its
+/// ordinary-code findings are replaced.
+fn read_as_install_script(w: &mut Walk, base: &Path, rel_s: &str) {
+    let path = base.join(rel_s);
+    let Ok(meta) = fs::symlink_metadata(&path) else {
+        return;
+    };
+    if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
+        return;
+    }
+    let Ok(bytes) = read_capped(&path) else {
+        return;
+    };
+    let Some(text) = as_text(&bytes) else {
+        return;
+    };
+    w.evidence.retain(|e| {
+        e.location.as_ref().is_none_or(|l| l.path != rel_s)
+            || !matches!(e.severity, Severity::Warning | Severity::Info)
+    });
+    w.evidence
+        .extend(text::scan_text(text, Context::AutoRun, rel_s, Some(0)));
+    if let Some((line, tool, excerpt)) = text::fetch_tool(text) {
+        w.evidence.push(
+            Evidence::new(
+                "downloads-more",
+                Severity::Opaque,
+                format!(
+                    "npm runs this file during install, and it can download more (it uses {tool}). Whatever it downloads was not fetched or read."
+                ),
+            )
+            .at(rel_s, Some(line))
+            .excerpt(excerpt),
+        );
+    }
+}
+
+fn join_inside(dir: &Path, rel: &str) -> Option<PathBuf> {
+    let mut out = dir.to_path_buf();
+    for c in Path::new(rel).components() {
+        match c {
+            Component::Normal(p) => out.push(p),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {

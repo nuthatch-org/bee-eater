@@ -5,13 +5,13 @@ use bee_static::Fetch;
 use ureq::Agent;
 use ureq::http::Uri;
 
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub const SCRIPT_MAX: u64 = 2 * 1024 * 1024;
 const MAX_HOPS: usize = 5;
 // A lure server expects curl, and may hand anything else a harmless decoy.
 const USER_AGENT: &str = "curl/8.7.1";
 
 pub fn fetch(url: &str) -> Fetch {
-    match fetch_bytes(url) {
+    match fetch_bytes(url, SCRIPT_MAX) {
         Ok(bytes) => Fetch::Got {
             url: url.to_string(),
             bytes,
@@ -23,7 +23,7 @@ pub fn fetch(url: &str) -> Fetch {
     }
 }
 
-fn fetch_bytes(start: &str) -> Result<Vec<u8>, String> {
+pub fn fetch_bytes(start: &str, max: u64) -> Result<Vec<u8>, String> {
     let agent: Agent = Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .max_redirects(0)
@@ -59,10 +59,12 @@ fn fetch_bytes(start: &str) -> Result<Vec<u8>, String> {
         return resp
             .body_mut()
             .with_config()
-            .limit(MAX_BYTES)
+            .limit(max)
             .read_to_vec()
             .map_err(|e| match e {
-                ureq::Error::BodyExceedsLimit(_) => "larger than 2 MiB".to_string(),
+                ureq::Error::BodyExceedsLimit(_) => {
+                    format!("larger than {} MiB", max / (1024 * 1024))
+                }
                 e => e.to_string(),
             });
     }

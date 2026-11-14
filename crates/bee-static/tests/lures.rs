@@ -319,3 +319,55 @@ fn a_fetched_installer_replaces_could_not_tell_with_what_it_says() {
     assert_eq!(report.verdict, Verdict::CouldNotTell);
     assert!(report.unchecked.iter().any(|u| u.contains("timed out")));
 }
+
+#[test]
+fn a_wheel_that_runs_code_at_every_python_start() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "pkg/__init__.py", b"");
+    write(
+        dir.path(),
+        "pkg-helper.pth",
+        b"./pkg\nimport os; os.system('id')\n",
+    );
+    write(dir.path(), "plain.pth", b"./vendor\n");
+    let report = scan_path(dir.path()).unwrap();
+    assert_eq!(rules(&report), vec!["python-startup-hook"]);
+    assert_eq!(report.evidence[0].location.as_ref().unwrap().line, Some(2));
+}
+
+#[test]
+fn a_script_run_by_an_install_hook_is_read_as_auto_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path();
+    write(
+        r,
+        "package.json",
+        br#"{"name":"x","scripts":{"postinstall":"node ./install.js"}}"#,
+    );
+    write(r, "install.js", b"const https = require('https');\nconst os = require('os');\nfs.readFileSync(os.homedir() + '/.ssh/id_ed25519');\n");
+    write(
+        r,
+        "lib/other.js",
+        b"fs.readFileSync(os.homedir() + '/.ssh/id_ed25519');\n",
+    );
+    let report = scan_path(r).unwrap();
+    assert_eq!(report.verdict, Verdict::Dangerous);
+    let at = |rule: &str, path: &str| {
+        report
+            .evidence
+            .iter()
+            .find(|e| e.rule == rule && e.location.as_ref().unwrap().path == path)
+            .map(|e| e.severity)
+    };
+    assert_eq!(at("secret-store", "install.js"), Some(Severity::Danger));
+    assert_eq!(at("secret-store", "lib/other.js"), Some(Severity::Warning));
+    assert_eq!(at("downloads-more", "install.js"), Some(Severity::Opaque));
+    assert_eq!(
+        report
+            .evidence
+            .iter()
+            .filter(|e| e.rule == "secret-store")
+            .count(),
+        2
+    );
+}

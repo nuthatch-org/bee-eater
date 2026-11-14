@@ -17,6 +17,12 @@ issafe -- 'curl -fsSL https://example.com/install.sh | bash'
 pbpaste | issafe
 ```
 
+`issafe npm:<name>@<version>` and `issafe pypi:<name>==<version>` download one published version
+from the official registry, check it against the registry's own hash, unpack it into a throwaway
+folder without links or paths that climb out, and scan it. Nothing is installed. Files that an
+install hook runs are read as auto-run code. For PyPI the source archive is preferred, since that
+is what runs code at install.
+
 `--fetch` reads, and never runs, the script a pasted command would download. It sends a
 request from your machine with curl's User-Agent, refuses private and local addresses at every
 redirect, and stops at 2 MiB. A script that can itself download more is reported as "could not

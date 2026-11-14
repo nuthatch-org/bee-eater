@@ -133,6 +133,32 @@ const NPM_HOOKS: &[&str] = &[
     "prepublish",
 ];
 
+/// Local files that an install hook hands to an interpreter, as written in the hook.
+pub fn hook_scripts(text: &str) -> Vec<String> {
+    let Ok(root) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(scripts) = root.get("scripts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for hook in NPM_HOOKS {
+        let Some(cmd) = scripts.get(*hook).and_then(Value::as_str) else {
+            continue;
+        };
+        for token in cmd.split_whitespace() {
+            let t = token.trim_matches(['"', '\'', ';', '&', '|']);
+            let script_like = [".js", ".cjs", ".mjs", ".sh", ".py"]
+                .iter()
+                .any(|e| t.ends_with(e));
+            if script_like && !t.contains("://") && !out.iter().any(|o: &String| o == t) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
 pub fn package_json(text: &str, path: &str) -> Vec<Evidence> {
     let Ok(root) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
@@ -369,6 +395,12 @@ mod tests {
             ]
         );
         assert_eq!(e[1].location.as_ref().unwrap().line, Some(5));
+    }
+
+    #[test]
+    fn scripts_named_by_install_hooks() {
+        let p = r#"{"scripts":{"postinstall":"node ./install.js && sh scripts/setup.sh","test":"node t.js"}}"#;
+        assert_eq!(hook_scripts(p), vec!["./install.js", "scripts/setup.sh"]);
     }
 
     #[test]

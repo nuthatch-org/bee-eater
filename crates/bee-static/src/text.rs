@@ -151,7 +151,7 @@ pub(crate) fn download_host(line: &str) -> Option<String> {
 
 static FETCH_TOOL: LazyLock<Regex> = LazyLock::new(|| {
     re(
-        r"(?i)(^|[^\w./-])(curl|wget|git|aria2c|invoke-webrequest|iwr|urllib|requests\.get|fetch\s*\()",
+        r#"(?i)(^|[^\w./-])(curl|wget|git|aria2c|invoke-webrequest|iwr|urllib|requests\.get|fetch\s*\(|https?\.(get|request)\s*\(|require\(\s*['"]https?['"]\s*\)|axios|undici)"#,
     )
 });
 
@@ -668,6 +668,7 @@ mod tests {
         );
         assert!(fetch_tool("# uses curl\nmkdir -p ~/.local/bin\necho done\n").is_none());
         assert!(fetch_tool("cp ./bin/curly /usr/local/bin\n").is_none());
+        assert!(fetch_tool("const https = require(\"https\");\n").is_some());
     }
 
     #[test]

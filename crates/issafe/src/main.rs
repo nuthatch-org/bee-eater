@@ -8,6 +8,7 @@ use clap::Parser;
 
 mod doctor;
 mod fetch;
+mod package;
 use serde_json::json;
 
 /// Ask whether something is safe to open, install or run. Nothing is executed.
@@ -41,6 +42,8 @@ const EXAMPLES: &str = "Examples:
   issafe -- 'curl -fsSL https://example.com/install.sh | bash'
   issafe --fetch -- 'curl -fsSL https://example.com/install.sh | bash'
   pbpaste | issafe
+  issafe npm:left-pad@1.3.0
+  issafe pypi:requests==2.32.3
 
 `issafe --doctor` checks whether this machine can run the sandbox.
 
@@ -50,6 +53,7 @@ const MAX_STDIN: u64 = 1024 * 1024;
 
 enum Target {
     Path(PathBuf),
+    Package(package::Spec),
     Command(String),
 }
 
@@ -82,6 +86,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
         target = Some(Target::Command(cli.command.join(" ")));
     }
     for input in &cli.inputs {
+        if let Some(spec) = package::Spec::parse(input) {
+            if target.is_some() {
+                return usage("give it one thing to look at at a time.");
+            }
+            match spec {
+                Ok(spec) => target = Some(Target::Package(spec)),
+                Err(e) => return usage(&e),
+            }
+            continue;
+        }
         if let Some(what) = not_yet_supported(input) {
             return usage(&format!(
                 "{what} are not supported yet. Download it somewhere and point issafe at the folder or file."
@@ -123,6 +137,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             p.display().to_string(),
             bee_static::scan_path(p).with_context(|| format!("reading {}", p.display()))?,
         ),
+        Target::Package(spec) => {
+            eprintln!("issafe: fetching the package from its registry to read it, not install it");
+            let unpacked = package::fetch_and_unpack(spec).map_err(|e| anyhow::anyhow!(e))?;
+            let mut report = bee_static::scan_path(&unpacked.root)
+                .with_context(|| format!("reading {}", unpacked.label))?;
+            report.unchecked.insert(
+                0,
+                "It was downloaded from the registry, checked against the registry's hash and unpacked. It was not installed.".into(),
+            );
+            report.unchecked.extend(unpacked.notes.iter().cloned());
+            (unpacked.label.clone(), report)
+        }
         Target::Command(c) if cli.fetch => {
             let fetched: Vec<_> = bee_static::download_urls(c)
                 .iter()
