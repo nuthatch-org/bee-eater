@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.1] - 2026-11-14
+
+- `issafe --shell-init bash`: the paste guard for bash 4 or later.
+
 ## [0.2.0] - 2026-11-14
 
 Still pre-alpha and still read-only: nothing is run, so every verdict comes from reading.
