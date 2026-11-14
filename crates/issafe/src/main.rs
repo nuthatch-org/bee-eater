@@ -9,6 +9,7 @@ use clap::Parser;
 mod doctor;
 mod fetch;
 mod package;
+mod repo;
 use serde_json::json;
 
 /// Ask whether something is safe to open, install or run. Nothing is executed.
@@ -42,6 +43,7 @@ const EXAMPLES: &str = "Examples:
   issafe -- 'curl -fsSL https://example.com/install.sh | bash'
   issafe --fetch -- 'curl -fsSL https://example.com/install.sh | bash'
   pbpaste | issafe
+  issafe https://github.com/owner/take-home
   issafe npm:left-pad@1.3.0
   issafe pypi:requests==2.32.3
 
@@ -54,6 +56,7 @@ const MAX_STDIN: u64 = 1024 * 1024;
 enum Target {
     Path(PathBuf),
     Package(package::Spec),
+    Repo(String),
     Command(String),
 }
 
@@ -94,6 +97,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 Ok(spec) => target = Some(Target::Package(spec)),
                 Err(e) => return usage(&e),
             }
+            continue;
+        }
+        if let Some(url) = repo::repo_url(input) {
+            if target.is_some() {
+                return usage("give it one thing to look at at a time.");
+            }
+            target = Some(Target::Repo(url));
             continue;
         }
         if let Some(what) = not_yet_supported(input) {
@@ -137,14 +147,32 @@ fn run(cli: Cli) -> Result<ExitCode> {
             p.display().to_string(),
             bee_static::scan_path(p).with_context(|| format!("reading {}", p.display()))?,
         ),
-        Target::Package(spec) => {
-            eprintln!("issafe: fetching the package from its registry to read it, not install it");
-            let unpacked = package::fetch_and_unpack(spec).map_err(|e| anyhow::anyhow!(e))?;
+        Target::Package(_) | Target::Repo(_) => {
+            let unpacked = match &target {
+                Target::Package(spec) => {
+                    eprintln!(
+                        "issafe: fetching the package from its registry to read it, not install it"
+                    );
+                    package::fetch_and_unpack(spec)
+                }
+                Target::Repo(url) => {
+                    eprintln!(
+                        "issafe: cloning {} to read it, never to check it out or run it",
+                        sanitise_excerpt(url, 200)
+                    );
+                    repo::fetch_repo(url)
+                }
+                _ => unreachable!(),
+            }
+            .map_err(|e| anyhow::anyhow!(e))?;
             let mut report = bee_static::scan_path(&unpacked.root)
                 .with_context(|| format!("reading {}", unpacked.label))?;
             report.unchecked.insert(
                 0,
-                "It was downloaded from the registry, checked against the registry's hash and unpacked. It was not installed.".into(),
+                match &target {
+                    Target::Repo(_) => "It was cloned and its files were read one by one. It was never checked out, installed or run.".into(),
+                    _ => "It was downloaded from the registry, checked against the registry's hash and unpacked. It was not installed.".into(),
+                },
             );
             report.unchecked.extend(unpacked.notes.iter().cloned());
             (unpacked.label.clone(), report)

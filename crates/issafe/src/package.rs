@@ -84,7 +84,7 @@ pub struct Unpacked {
     pub root: PathBuf,
     pub label: String,
     pub notes: Vec<String>,
-    _dir: tempfile::TempDir,
+    pub(crate) _dir: tempfile::TempDir,
 }
 
 pub fn fetch_and_unpack(spec: &Spec) -> Result<Unpacked, String> {
@@ -208,7 +208,7 @@ fn pypi(name: &str, version: Option<&str>, dir: tempfile::TempDir) -> Result<Unp
 }
 
 /// Only plain relative paths survive: no `..`, no root, no drive prefix.
-fn safe_rel(path: &Path) -> Option<PathBuf> {
+pub(crate) fn safe_rel(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
@@ -220,15 +220,15 @@ fn safe_rel(path: &Path) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-struct Budget {
+pub(crate) struct Budget {
     bytes: u64,
     entries: usize,
-    skipped_links: usize,
-    skipped_paths: usize,
+    pub(crate) skipped_links: usize,
+    pub(crate) skipped_paths: usize,
 }
 
 impl Budget {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Budget {
             bytes: 0,
             entries: 0,
@@ -237,7 +237,7 @@ impl Budget {
         }
     }
 
-    fn take(&mut self, size: u64) -> Result<(), String> {
+    pub(crate) fn take(&mut self, size: u64) -> Result<(), String> {
         self.entries += 1;
         self.bytes += size;
         if self.entries > ENTRIES_MAX || self.bytes > UNPACKED_MAX {
@@ -246,7 +246,7 @@ impl Budget {
         Ok(())
     }
 
-    fn notes(&self, notes: &mut Vec<String>) {
+    pub(crate) fn notes(&self, notes: &mut Vec<String>) {
         if self.skipped_links > 0 {
             notes.push(format!(
                 "{} link(s) inside the archive were not unpacked.",
@@ -262,7 +262,7 @@ impl Budget {
     }
 }
 
-fn write_inert(root: &Path, rel: &Path, data: &[u8]) -> Result<(), String> {
+pub(crate) fn write_inert(root: &Path, rel: &Path, data: &[u8]) -> Result<(), String> {
     let dest = root.join(rel);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

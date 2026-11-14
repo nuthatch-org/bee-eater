@@ -71,7 +71,7 @@ pub fn fetch_bytes(start: &str, max: u64) -> Result<Vec<u8>, String> {
     Err("too many redirects".into())
 }
 
-fn check_public(uri: &Uri) -> Result<(), String> {
+pub(crate) fn check_public(uri: &Uri) -> Result<(), String> {
     let scheme = uri.scheme_str().unwrap_or("");
     let port = match scheme {
         "https" => 443,

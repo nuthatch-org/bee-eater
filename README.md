@@ -23,6 +23,11 @@ folder without links or paths that climb out, and scan it. Nothing is installed.
 install hook runs are read as auto-run code. For PyPI the source archive is preferred, since that
 is what runs code at install.
 
+`issafe https://github.com/owner/repo` reads a public repository without checking it out. It makes
+a bare shallow clone with git's own configuration, hooks, credential helpers and every protocol
+but https switched off, then writes each file at the latest commit itself, so no filter, link or
+submodule gets to act.
+
 `--fetch` reads, and never runs, the script a pasted command would download. It sends a
 request from your machine with curl's User-Agent, refuses private and local addresses at every
 redirect, and stops at 2 MiB. A script that can itself download more is reported as "could not
