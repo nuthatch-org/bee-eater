@@ -18,4 +18,4 @@ sha2 = "0.11.1"
 tar = "0.4.46"
 tempfile = "3.27.0"
 ureq = "3.5.2"
-zip = "9.5.1"
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
