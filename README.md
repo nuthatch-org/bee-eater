@@ -25,6 +25,10 @@ tell", because installers usually do their real work in that second download.
 Exit status is 0 for no red flags found, 10 could not tell, 20 suspicious, 30 dangerous. `--json`
 prints the report for scripts.
 
+`issafe --doctor` checks whether this machine has what the sandbox will need (Apple Silicon and
+Hypervisor.framework, or a usable `/dev/kvm`, plus libkrun) and prints the fix for anything
+missing.
+
 `issafe` is the report's working name for the command, not a decision.
 
 ## What the static pass catches

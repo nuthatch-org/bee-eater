@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 use bee_evidence::{Report, Severity, Verdict, sanitise_excerpt};
 use clap::Parser;
 
+mod doctor;
 mod fetch;
 use serde_json::json;
 
@@ -25,6 +26,10 @@ struct Cli {
     #[arg(long)]
     fetch: bool,
 
+    /// Check whether this machine can run the sandbox, and say how to fix what is missing.
+    #[arg(long, exclusive = true)]
+    doctor: bool,
+
     /// A command you were told to paste, after `--`.
     #[arg(last = true)]
     command: Vec<String>,
@@ -36,6 +41,8 @@ const EXAMPLES: &str = "Examples:
   issafe -- 'curl -fsSL https://example.com/install.sh | bash'
   issafe --fetch -- 'curl -fsSL https://example.com/install.sh | bash'
   pbpaste | issafe
+
+`issafe --doctor` checks whether this machine can run the sandbox.
 
 Exit status: 0 no red flags found, 10 could not tell, 20 suspicious, 30 dangerous, 2 usage.";
 
@@ -63,6 +70,11 @@ fn usage(msg: &str) -> Result<ExitCode> {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    if cli.doctor {
+        let ready = doctor::run(&mut std::io::stdout().lock())?;
+        return Ok(ExitCode::from(if ready { 0 } else { 1 }));
+    }
+
     let mut question = Vec::new();
     let mut target = None;
 
