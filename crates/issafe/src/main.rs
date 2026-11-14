@@ -32,8 +32,8 @@ struct Cli {
     #[arg(long, exclusive = true)]
     doctor: bool,
 
-    /// Print the shell hook that checks risky-looking commands before they run. Only zsh for
-    /// now: add `eval "$(issafe --shell-init zsh)"` to ~/.zshrc.
+    /// Print the shell hook that checks risky-looking commands before they run, for zsh or
+    /// bash 4+: add `eval "$(issafe --shell-init zsh)"` to ~/.zshrc, or the bash form to ~/.bashrc.
     #[arg(long, value_name = "SHELL", exclusive = true)]
     shell_init: Option<String>,
 
@@ -87,10 +87,11 @@ fn usage(msg: &str) -> Result<ExitCode> {
 
 fn run(cli: Cli) -> Result<ExitCode> {
     if let Some(shell) = &cli.shell_init {
-        if shell != "zsh" {
-            return usage("only zsh is supported so far: issafe --shell-init zsh");
+        match shell.as_str() {
+            "zsh" => print!("{}", include_str!("../shell/issafe.zsh")),
+            "bash" => print!("{}", include_str!("../shell/issafe.bash")),
+            _ => return usage("the paste guard supports zsh and bash: issafe --shell-init zsh"),
         }
-        print!("{}", include_str!("../shell/issafe.zsh"));
         return Ok(ExitCode::SUCCESS);
     }
     if cli.doctor {
