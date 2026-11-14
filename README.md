@@ -11,7 +11,8 @@ are not built. The case for building it, the threat set, the isolation options a
 design are in [docs/research-2026-11.md](docs/research-2026-11.md).
 
 ```sh
-cargo install --path crates/issafe
+# prebuilt binaries for macOS and Linux: https://github.com/nuthatch-org/bee-eater/releases
+cargo install --git https://github.com/nuthatch-org/bee-eater issafe
 issafe "recruiter sent me this, ok?" ./take-home-repo
 issafe -- 'curl -fsSL https://example.com/install.sh | bash'
 pbpaste | issafe
