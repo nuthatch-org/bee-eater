@@ -70,6 +70,11 @@ missing.
   secret stores and wallet extensions, fake password prompts, AI CLIs started with their
   safety prompts off, persistence, VM checks, and whitespace used to push a command off-screen.
 
+- macOS installer packages (`.pkg`): the install scripts Installer runs as root, and any
+  command the installer's own JavaScript runs. Only the table of contents and the scripts are
+  read; the payload is skipped and reported as unread. Disk images (`.dmg`) are not opened,
+  because mounting one hands a hostile filesystem to the kernel.
+
 It reports `node_modules`, build caches and compiled programs as unread rather than pretending to
 have read them, and never follows a link.
 

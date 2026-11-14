@@ -2,6 +2,7 @@
 //! folder it was pointed at.
 
 mod formats;
+mod pkg;
 mod text;
 
 use std::fs;
@@ -83,6 +84,7 @@ struct Walk {
     unread: Vec<(String, &'static str)>,
     hit_cap: bool,
     hook_targets: Vec<String>,
+    pkg_notes: Vec<String>,
 }
 
 /// Inspects a folder, or a single file, without running anything in it.
@@ -144,6 +146,14 @@ pub fn scan_path(root: &Path) -> std::io::Result<Report> {
                     .at(&rel_s, None),
                 );
             }
+            continue;
+        }
+
+        let ext = rel
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if matches!(ext.as_str(), "pkg" | "mpkg") && read_package(&mut w, path, &rel_s) {
             continue;
         }
 
@@ -224,6 +234,7 @@ pub fn scan_path(root: &Path) -> std::io::Result<Report> {
     if w.symlinks > 0 {
         unchecked.push(format!("{} link(s) were not followed.", w.symlinks));
     }
+    unchecked.append(&mut w.pkg_notes);
     if w.hit_cap {
         unchecked.push(format!(
             "The folder has more than {MAX_FILES} files; the rest were not read."
@@ -643,6 +654,30 @@ fn join_inside(dir: &Path, rel: &str) -> Option<PathBuf> {
         }
     }
     Some(out)
+}
+
+/// Returns whether the file was a xar package; anything else falls through to the usual checks.
+fn read_package(w: &mut Walk, path: &Path, rel_s: &str) -> bool {
+    let Ok(mut f) = fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 4];
+    if f.read_exact(&mut head).is_err() || !pkg::is_xar(&head) {
+        return false;
+    }
+    if std::io::Seek::rewind(&mut f).is_err() {
+        return false;
+    }
+    match pkg::scan_pkg(&mut std::io::BufReader::new(f), rel_s) {
+        Ok(scan) => {
+            w.evidence.extend(scan.evidence);
+            w.pkg_notes.extend(scan.unchecked);
+        }
+        Err(why) => w.pkg_notes.push(format!(
+            "{rel_s} looks like an installer package but could not be read ({why})."
+        )),
+    }
+    true
 }
 
 fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
