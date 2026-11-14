@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0] - 2026-11-14
+
+Still pre-alpha and still read-only: nothing is run, so every verdict comes from reading.
+
+- `issafe npm:<name>@<version>` and `issafe pypi:<name>==<version>`, hash-checked against the
+  registry and unpacked inert. Files an install hook runs are read as auto-run code.
+- `issafe https://github.com/<owner>/<repo>` and other forges: a bare shallow clone read file by
+  file, never checked out, plus recent history of auto-run files for scrubbed lures and rotating
+  download hosts.
+- `issafe Setup.pkg`: a macOS installer's root install scripts and installer JavaScript. The
+  payload is skipped and reported as unread.
+- `issafe --shell-init zsh`: holds risky-looking lines on Enter until checked.
+- `issafe --doctor`: whether this machine has what the sandbox will need.
+- Python `.pth` lines that run at every interpreter start are flagged.
+- Fetched installers that can download more are "could not tell", not "no red flags".
+
 ## [0.1.0] - 2026-11-14
 
 First release. Pre-alpha: the static half works, the sandbox that runs things does not exist yet,
